@@ -22,7 +22,11 @@ async function run() {
     const worksheetCollection = database.collection("worksheets");
     const paymentCollection = database.collection("payments");
 
-    // ✅ Create user
+    // ---------------------------
+    // User APIs
+    // ---------------------------
+
+    // Create user
     app.post("/users", async (req, res) => {
       const user = req.body;
       const exists = await userCollection.findOne({ email: user.email });
@@ -33,14 +37,14 @@ async function run() {
       res.send(result);
     });
 
-    // ✅ Get user by email
+    // Get user by email
     app.get("/users/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send(user);
     });
 
-    // ✅ Get all users
+    // Get all users or filter by email query param
     app.get("/users", async (req, res) => {
       const email = req.query.email;
       if (email) {
@@ -51,14 +55,14 @@ async function run() {
       res.send(users);
     });
 
-    // ✅ Get role by email
+    // Get role by email
     app.get("/users/role/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send({ role: user?.role || null });
     });
 
-    // ✅ GET only employee users
+    // Get only employees
     app.get("/employees", async (req, res) => {
       try {
         const employees = await userCollection.find({ role: "employee" }).toArray();
@@ -69,7 +73,7 @@ async function run() {
       }
     });
 
-    // ✅ Update user role
+    // Update user role
     app.patch("/users/role/:id", async (req, res) => {
       const id = req.params.id;
       const { role } = req.body;
@@ -85,7 +89,7 @@ async function run() {
       }
     });
 
-    // ✅ Update verification status
+    // Update verification status
     app.patch("/users/verify/:id", async (req, res) => {
       const id = req.params.id;
       const { isVerified } = req.body;
@@ -101,7 +105,7 @@ async function run() {
       }
     });
 
-    // ✅ Delete user
+    // Delete user
     app.delete("/users/:id", async (req, res) => {
       const id = req.params.id;
       try {
@@ -113,24 +117,44 @@ async function run() {
       }
     });
 
-    // ✅ Add work entry
+    // ---------------------------
+    // Worksheet APIs (Work entries by employees)
+    // ---------------------------
+
+    // Add work entry
     app.post("/works", async (req, res) => {
       const workData = req.body;
       const result = await worksheetCollection.insertOne(workData);
       res.send(result);
     });
 
-    // ✅ Get work entries by employee email
+    // Get work entries (with optional filters: email, month, year)
     app.get("/works", async (req, res) => {
-      const email = req.query.email;
-      const result = await worksheetCollection
-        .find({ email })
-        .sort({ date: -1 })
-        .toArray();
-      res.send(result);
+      const { email, month, year } = req.query;
+
+      const query = {};
+
+      if (email) {
+        query.email = email;
+      }
+
+      if (month && year) {
+        const startDate = new Date(parseInt(year), parseInt(month) - 1, 1);
+        const endDate = new Date(parseInt(year), parseInt(month), 1);
+
+        query.date = { $gte: startDate, $lt: endDate };
+      }
+
+      try {
+        const works = await worksheetCollection.find(query).sort({ date: -1 }).toArray();
+        res.send(works);
+      } catch (error) {
+        console.error("Error fetching works:", error);
+        res.status(500).send({ message: "Failed to fetch work entries" });
+      }
     });
 
-    // ✅ Update a work entry
+    // Update work entry
     app.patch("/works/:id", async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
@@ -141,21 +165,25 @@ async function run() {
       res.send(result);
     });
 
-    // ✅ Delete a work entry
+    // Delete work entry
     app.delete("/works/:id", async (req, res) => {
       const id = req.params.id;
       const result = await worksheetCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
-    // ✅ POST: Add Payment (by HR)
+    // ---------------------------
+    // Payment APIs
+    // ---------------------------
+
+    // Add payment (by HR)
     app.post("/payments", async (req, res) => {
       const payment = req.body;
       const result = await paymentCollection.insertOne(payment);
       res.send(result);
     });
 
-    // ✅ GET: All Payments of an employee (with pagination, earliest month first)
+    // Get payments (with pagination) for an employee
     app.get("/payments", async (req, res) => {
       const email = req.query.email;
       const page = parseInt(req.query.page) || 0;
