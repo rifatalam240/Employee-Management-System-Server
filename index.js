@@ -145,7 +145,7 @@ async function run() {
       }
     });
 
-    app.patch("/make-hr/:id", async (req, res) => {
+    app.patch("/make-hr/:id", verifyfirebasetoken, checkRole("admin"), async (req, res) => {
       const id = req.params.id;
       try {
         const result = await userCollection.updateOne(
@@ -158,7 +158,7 @@ async function run() {
       }
     });
 
-    app.patch("/fire-user/:id", async (req, res) => {
+    app.patch("/fire-user/:id", verifyfirebasetoken, checkRole("admin"), async (req, res) => {
       const id = req.params.id;
       try {
         const result = await userCollection.updateOne(
@@ -248,7 +248,7 @@ async function run() {
       res.send({ payments, total });
     });
 
-    app.get("/payroll", async (req, res) => {
+    app.get("/payroll", verifyfirebasetoken, checkRole("admin"), async (req, res) => {
       try {
         const unpaid = await paymentCollection.find({ paid: { $ne: true } }).toArray();
         res.send(unpaid);
@@ -257,7 +257,7 @@ async function run() {
       }
     });
 
-    app.patch("/payroll/pay/:id", async (req, res) => {
+    app.patch("/payroll/pay/:id", verifyfirebasetoken, checkRole("admin"), async (req, res) => {
       const id = req.params.id;
       const payDate = new Date();
       try {
