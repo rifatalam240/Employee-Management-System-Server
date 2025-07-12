@@ -26,7 +26,27 @@ admin.initializeApp({
   clientC509CertUrl: process.env.FIREBASE_CLIENT_X509_CERT_URL,
   universeDomain: process.env.FIREBASE_UNIVERSE_DOMAIN,
 });
+// verifyfirebasetoken//
+const verifyfirebasetoken = async (req, res, next) => {
+  const authheader = req.headers.authorization;
+  // console.log("veryfytoken", authheader);
+  if (!authheader || !authheader.startsWith("Bearer ")) {
+    // console.log("notauthheader");
+    return res.status(401).send({ message: "unauthorizwd token" });
+  }
+  const token = authheader.split(" ")[1];
 
+  try {
+    const decodedtoken = await admin.auth().verifyIdToken(token);
+    req.decodedtoken = decodedtoken;
+    // console.log("token in the middaleware", decodedtoken);
+
+    next();
+  } catch (error) {
+    // console.log("error in catch");
+    return res.status(401).send({ message: "unauthorized access" });
+  }
+};
 async function run() {
   try {
     await client.connect();
