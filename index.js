@@ -12,6 +12,8 @@ var admin = require("firebase-admin");
 
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
+const Stripe = require("stripe");
+const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
 let userCollection; // Declare globally for role check middleware
 
@@ -270,6 +272,61 @@ async function run() {
         res.status(500).send({ message: "Failed to approve payment" });
       }
     });
+    //create payment intent//
+
+
+app.post("/create-payment-intent", async (req, res) => {
+  const { amount } = req.body; // amount in BDT
+
+  const paymentIntent = await stripe.paymentIntents.create({
+    amount: amount * 100, // convert to paisa
+    currency: "bdt",
+    payment_method_types: ["card"],
+  });
+
+  res.send({
+    clientSecret: paymentIntent.client_secret,
+  });
+});
+app.post("/payments", verifyfirebasetoken, checkRole("hr"), async (req, res) => {
+  const { email, month, year, amount, transactionId } = req.body;
+
+  if (!email || !month || !year || !amount || !transactionId) {
+    return res.status(400).send({ message: "Missing required fields" });
+  }
+
+  try {
+    // Check for existing payment for same user/month/year
+    const existingPayment = await paymentCollection.findOne({
+      email,
+      month,
+      year,
+      paid: true,
+    });
+
+    if (existingPayment) {
+      return res.status(409).send({
+        message: "Payment already exists for this employee in this month and year",
+      });
+    }
+
+    // Otherwise, insert payment
+    const result = await paymentCollection.insertOne({
+      email,
+      amount,
+      transactionId,
+      paid: true,
+      month,
+      year,
+      payDate: new Date(),
+    });
+
+    res.send(result);
+  } catch (error) {
+    res.status(500).send({ message: "Failed to process payment" });
+  }
+});
+
 
   } catch (err) {
     console.error("MongoDB error:", err);
