@@ -12,6 +12,9 @@ var admin = require("firebase-admin");
 
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
+
+let userCollection; // Declare globally for role check middleware
+
 admin.initializeApp({
   credential: admin.credential.cert({
     projectId: process.env.FIREBASE_PROJECT_ID,
@@ -19,54 +22,47 @@ admin.initializeApp({
     privateKey: process.env.FIREBASE_PRIVATE_KEY.replace(/\\n/g, "\n"),
     privateKeyId: process.env.FIREBASE_PRIVATE_KEY_ID,
   }),
-  clientId: process.env.FIREBASE_CLIENT_ID,
-  authUri: process.env.FIREBASE_AUTH_URI,
-  tokenUri: process.env.FIREBASE_TOKEN_URI,
-  authProviderX509CertUrl: process.env.FIREBASE_AUTH_PROVIDER_X509_CERT_URL,
-  clientC509CertUrl: process.env.FIREBASE_CLIENT_X509_CERT_URL,
-  universeDomain: process.env.FIREBASE_UNIVERSE_DOMAIN,
 });
-// verifyfirebasetoken//
+
 const verifyfirebasetoken = async (req, res, next) => {
   const authheader = req.headers.authorization;
-  // console.log("veryfytoken", authheader);
   if (!authheader || !authheader.startsWith("Bearer ")) {
-    // console.log("notauthheader");
-    return res.status(401).send({ message: "unauthorizwd token" });
+    return res.status(401).send({ message: "unauthorized token" });
   }
   const token = authheader.split(" ")[1];
-
   try {
     const decodedtoken = await admin.auth().verifyIdToken(token);
     req.decodedtoken = decodedtoken;
-    // console.log("token in the middaleware", decodedtoken);
-
     next();
   } catch (error) {
-    // console.log("error in catch");
     return res.status(401).send({ message: "unauthorized access" });
   }
 };
+
+const checkRole = (requiredRole) => {
+  return async (req, res, next) => {
+    const email = req.decodedtoken?.email;
+    const user = await userCollection.findOne({ email });
+    if (!user) return res.status(404).send({ message: "User not found" });
+    if (user.role !== requiredRole) return res.status(403).send({ message: "Access denied" });
+    next();
+  };
+};
+
 async function run() {
   try {
     await client.connect();
     console.log("✅ MongoDB Connected");
 
     const database = client.db("company");
-    const userCollection = database.collection("users");
+    userCollection = database.collection("users");
     const worksheetCollection = database.collection("worksheets");
     const paymentCollection = database.collection("payments");
-
-    // ---------------------------
-    // User APIs
-    // ---------------------------
 
     app.post("/users", async (req, res) => {
       const user = req.body;
       const exists = await userCollection.findOne({ email: user.email });
-      if (exists) {
-        return res.status(409).send({ message: "User already exists" });
-      }
+      if (exists) return res.status(409).send({ message: "User already exists" });
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
@@ -98,7 +94,6 @@ async function run() {
         const employees = await userCollection.find({ role: "employee" }).toArray();
         res.send(employees);
       } catch (error) {
-        console.error("Error fetching employees:", error);
         res.status(500).send({ message: "Failed to fetch employees" });
       }
     });
@@ -113,7 +108,6 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error updating role:", error);
         res.status(500).send({ message: "Failed to update role" });
       }
     });
@@ -128,7 +122,6 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error updating verification:", error);
         res.status(500).send({ message: "Failed to update verification" });
       }
     });
@@ -139,20 +132,15 @@ async function run() {
         const result = await userCollection.deleteOne({ _id: new ObjectId(id) });
         res.send(result);
       } catch (error) {
-        console.error("Error deleting user:", error);
         res.status(500).send({ message: "Failed to delete user" });
       }
     });
 
-    // ✅ Verified employee & HR only
     app.get("/verified-users", async (req, res) => {
       try {
-        const users = await userCollection
-          .find({ isVerified: true, role: { $ne: "admin" } })
-          .toArray();
+        const users = await userCollection.find({ isVerified: true, role: { $ne: "admin" } }).toArray();
         res.send(users);
       } catch (error) {
-        console.error("Error fetching verified users:", error);
         res.status(500).send({ message: "Failed to fetch verified users" });
       }
     });
@@ -166,7 +154,6 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error making HR:", error);
         res.status(500).send({ message: "Failed to make HR" });
       }
     });
@@ -180,12 +167,11 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error firing user:", error);
         res.status(500).send({ message: "Failed to fire user" });
       }
     });
 
-    app.patch("/update-salary/:id", async (req, res) => {
+    app.patch("/update-salary/:id", verifyfirebasetoken, checkRole("admin"), async (req, res) => {
       const id = req.params.id;
       const { salary } = req.body;
       try {
@@ -195,14 +181,9 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error updating salary:", error);
         res.status(500).send({ message: "Failed to update salary" });
       }
     });
-
-    // ---------------------------
-    // Worksheet APIs
-    // ---------------------------
 
     app.post("/works", async (req, res) => {
       const workData = req.body;
@@ -212,7 +193,6 @@ async function run() {
 
     app.get("/works", async (req, res) => {
       const { email, month, year } = req.query;
-
       const query = {};
       if (email) query.email = email;
       if (month && year) {
@@ -220,12 +200,10 @@ async function run() {
         const endDate = new Date(parseInt(year), parseInt(month), 1);
         query.date = { $gte: startDate, $lt: endDate };
       }
-
       try {
         const works = await worksheetCollection.find(query).sort({ date: -1 }).toArray();
         res.send(works);
       } catch (error) {
-        console.error("Error fetching works:", error);
         res.status(500).send({ message: "Failed to fetch work entries" });
       }
     });
@@ -245,10 +223,6 @@ async function run() {
       const result = await worksheetCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
-
-    // ---------------------------
-    // Payment APIs
-    // ---------------------------
 
     app.post("/payments", async (req, res) => {
       const payment = req.body;
@@ -279,7 +253,6 @@ async function run() {
         const unpaid = await paymentCollection.find({ paid: { $ne: true } }).toArray();
         res.send(unpaid);
       } catch (error) {
-        console.error("Error fetching payroll:", error);
         res.status(500).send({ message: "Failed to fetch payroll data" });
       }
     });
@@ -287,7 +260,6 @@ async function run() {
     app.patch("/payroll/pay/:id", async (req, res) => {
       const id = req.params.id;
       const payDate = new Date();
-
       try {
         const result = await paymentCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -295,7 +267,6 @@ async function run() {
         );
         res.send(result);
       } catch (error) {
-        console.error("Error approving payment:", error);
         res.status(500).send({ message: "Failed to approve payment" });
       }
     });
