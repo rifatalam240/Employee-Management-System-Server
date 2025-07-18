@@ -799,12 +799,9 @@ async function run() {
           try {
             month = new Date(`${month} 1, ${year}`).getMonth() + 1; // e.g., "March" -> 3
           } catch (error) {
-            return res
-              .status(400)
-              .send({
-                message:
-                  "Invalid month format. Use valid month name or number.",
-              });
+            return res.status(400).send({
+              message: "Invalid month format. Use valid month name or number.",
+            });
           }
         }
 
@@ -894,6 +891,7 @@ async function run() {
       checkRole("admin"),
       async (req, res) => {
         try {
+          // fired ইউজারও আনা হবে, শুধু verified ইউজার
           const users = await userCollection
             .find({ isVerified: true })
             .toArray();
