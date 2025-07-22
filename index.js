@@ -8,16 +8,22 @@ const Stripe = require("stripe");
 const app = express();
 const port = process.env.PORT || 5000;
 
+// Middleware
 app.use(cors());
 app.use(express.json());
 
+// MongoDB Client
 const uri = process.env.MONGO_URI;
 const client = new MongoClient(uri);
+
+// Stripe Initialization
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
+// Collections (later assign in run function)
 let userCollection;
 let worksheetCollection;
 let paymentCollection;
+let messagesCollection;
 
 // Initialize Firebase Admin SDK
 admin.initializeApp({
@@ -29,7 +35,7 @@ admin.initializeApp({
   }),
 });
 
-// Middleware: Firebase JWT verification
+// Middleware: Verify Firebase Token
 const verifyFirebaseToken = async (req, res, next) => {
   const authheader = req.headers.authorization;
   if (!authheader || !authheader.startsWith("Bearer ")) {
@@ -45,7 +51,7 @@ const verifyFirebaseToken = async (req, res, next) => {
   }
 };
 
-// Middleware: Role based access
+// Middleware: Role Based Access Control
 const checkRole = (requiredRole) => {
   return async (req, res, next) => {
     const email = req.decodedtoken?.email;
@@ -57,26 +63,21 @@ const checkRole = (requiredRole) => {
   };
 };
 
+// Main async function to run the server logic
 async function run() {
   try {
-    await client.connect();
+    // await client.connect();
     console.log("✅ MongoDB Connected");
 
     const database = client.db("company");
     userCollection = database.collection("users");
     worksheetCollection = database.collection("worksheets");
     paymentCollection = database.collection("payments");
-    const messages = database.collection("messages");
-    // await paymentCollection.deleteMany({
-    //   $or: [
-    //     { month: { $exists: false } },
-    //     { year: { $exists: false } },
-    //     { transactionId: { $exists: false } },
-    //   ],
-    // });
-    // console.log("🧹 Deleted old broken payment records");
+    messagesCollection = database.collection("messages");
 
     // ===== User APIs =====
+
+    // Add new user
     app.post("/users", async (req, res) => {
       const user = req.body;
       const exists = await userCollection.findOne({ email: user.email });
@@ -85,19 +86,18 @@ async function run() {
       const result = await userCollection.insertOne(user);
       res.send(result);
     });
-    // HR Dashboard summary
+
+    // Get dashboard summary (HR or Admin)
     app.get(
       "/dashboard-summary",
       verifyFirebaseToken,
-      checkRole("hr"), // অথবা "admin"
+      checkRole("hr"), // or "admin"
       async (req, res) => {
         try {
-          // মোট কর্মচারী সংখ্যা
           const totalEmployees = await userCollection.countDocuments({
             role: "employee",
           });
 
-          // মোট বেতন পরিশোধ (payments collection থেকে)
           const totalPaidSalaryAgg = await paymentCollection
             .aggregate([
               { $match: { paid: true } },
@@ -107,7 +107,6 @@ async function run() {
 
           const totalPaidSalary = totalPaidSalaryAgg[0]?.totalPaid || 0;
 
-          // মোট বেতন (user collection থেকে)
           const totalSalaryAgg = await userCollection
             .aggregate([
               { $match: { role: "employee" } },
@@ -117,10 +116,8 @@ async function run() {
 
           const totalSalary = totalSalaryAgg[0]?.totalSalary || 0;
 
-          // বাকি বেতন = মোট বেতন - মোট পরিশোধ
           const pendingSalary = totalSalary - totalPaidSalary;
 
-          // সাম্প্রতিক ৫ টি পেমেন্ট
           const recentPayments = await paymentCollection
             .find({ paid: true })
             .sort({ payDate: -1 })
@@ -142,12 +139,14 @@ async function run() {
       }
     );
 
+    // Get single user by email
     app.get("/users/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send(user);
     });
 
+    // Get all users or filter by email
     app.get("/users", async (req, res) => {
       const email = req.query.email;
       if (email) {
@@ -158,12 +157,14 @@ async function run() {
       res.send(users);
     });
 
+    // Get user role by email
     app.get("/users/role/:email", async (req, res) => {
       const email = req.params.email;
       const user = await userCollection.findOne({ email });
       res.send({ role: user?.role || null });
     });
 
+    // Get employees only
     app.get("/employees", async (req, res) => {
       try {
         const employees = await userCollection
@@ -175,7 +176,7 @@ async function run() {
       }
     });
 
-    // Get all verified users (Admin only)
+    // Get verified users (Admin only)
     app.get(
       "/verified-users",
       verifyFirebaseToken,
@@ -212,7 +213,7 @@ async function run() {
       }
     );
 
-    // Toggle verification (Admin only)
+    // Toggle verification (HR only)
     app.patch(
       "/users/verify/:id",
       verifyFirebaseToken,
@@ -278,21 +279,39 @@ async function run() {
     );
 
     // ===== Worksheet APIs =====
+
+    // Add new work entry
     app.post("/works", async (req, res) => {
       const workData = req.body;
-      const result = await worksheetCollection.insertOne(workData);
+
+      const cleanedData = {
+        ...workData,
+        hours: parseFloat(workData.hours),
+        date: new Date(workData.date),
+      };
+
+      const result = await worksheetCollection.insertOne(cleanedData);
       res.send(result);
     });
 
+    // Get work entries with optional filtering by email, month, year
     app.get("/works", async (req, res) => {
       const { email, month, year } = req.query;
       const query = {};
+
       if (email) query.email = email;
+
       if (month && year) {
-        const startDate = new Date(parseInt(year), parseInt(month) - 1, 1);
-        const endDate = new Date(parseInt(year), parseInt(month), 1);
-        query.date = { $gte: startDate, $lt: endDate };
+        const m = parseInt(month);
+        const y = parseInt(year);
+
+        if (!isNaN(m) && !isNaN(y)) {
+          const startDate = new Date(y, m - 1, 1);
+          const endDate = new Date(y, m, 1);
+          query.date = { $gte: startDate, $lt: endDate };
+        }
       }
+
       try {
         const works = await worksheetCollection
           .find(query)
@@ -304,6 +323,7 @@ async function run() {
       }
     });
 
+    // Update work entry by ID
     app.patch("/works/:id", async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
@@ -314,6 +334,7 @@ async function run() {
       res.send(result);
     });
 
+    // Delete work entry by ID
     app.delete("/works/:id", async (req, res) => {
       const id = req.params.id;
       const result = await worksheetCollection.deleteOne({
@@ -324,10 +345,10 @@ async function run() {
 
     // ===== Stripe Payment Intent =====
     app.post("/create-payment-intent", async (req, res) => {
-      const { amount } = req.body; // BDT amount expected
+      const { amount } = req.body; // Amount in BDT expected
       try {
         const paymentIntent = await stripe.paymentIntents.create({
-          amount: amount * 100, // paisa conversion
+          amount: amount * 100, // Convert to paisa
           currency: "bdt",
           payment_method_types: ["card"],
         });
@@ -339,7 +360,7 @@ async function run() {
       }
     });
 
-    // ===== Payments API (Admin only) with duplicate prevention =====
+    // ===== Payments API (HR only) with duplicate prevention =====
     app.post(
       "/payments",
       verifyFirebaseToken,
@@ -347,10 +368,9 @@ async function run() {
       async (req, res) => {
         let { email, month, year, amount, transactionId } = req.body;
 
-        // Month কে number বানানো (যদি string হয়)
         if (typeof month === "string") {
           try {
-            month = new Date(`${month} 1, ${year}`).getMonth() + 1; // e.g., "March" -> 3
+            month = new Date(`${month} 1, ${year}`).getMonth() + 1;
           } catch (error) {
             return res.status(400).send({
               message: "Invalid month format. Use valid month name or number.",
@@ -365,18 +385,17 @@ async function run() {
         }
 
         try {
-          // Check duplicate paid salary for same month/year
+          // Check duplicate payment request for same month/year
           const existingPayment = await paymentCollection.findOne({
             email,
             month,
             year,
-            paid: true,
           });
 
           if (existingPayment) {
             return res.status(409).send({
               message:
-                "Payment already exists for this employee in this month and year",
+                "Payment request already exists for this employee in this month and year",
             });
           }
 
@@ -384,24 +403,86 @@ async function run() {
             email,
             amount,
             transactionId,
-            paid: true,
+            paid: false, // Payment requested, not paid yet
             month,
             year,
-            payDate: new Date(),
+            payDate: null,
+            requestedAt: new Date(),
           });
 
           res.send(result);
         } catch (error) {
-          console.error("Failed to process payment:", error);
+          console.error("Failed to process payment request:", error);
           res.status(500).send({
-            message: "Failed to process payment",
+            message: "Failed to process payment request",
             error: error.message,
           });
         }
       }
     );
+    app.delete("/deleteAllPayments", async (req, res) => {
+      try {
+        const result = await paymentCollection.deleteMany({});
+        console.log("Deleted payments count:", result.deletedCount); // লগে দেখাবে
+        res.send({
+          message: "All payments deleted",
+          deletedCount: result.deletedCount,
+        });
+      } catch (error) {
+        console.error("Failed to delete payments:", error.message);
+        res
+          .status(500)
+          .send({ message: "Failed to delete payments", error: error.message });
+      }
+    });
 
-    // Get payment history for employee with pagination
+    app.post(
+      "/paymentsbyadmin",
+      verifyFirebaseToken,
+      checkRole("admin"),
+      async (req, res) => {
+        const { email, amount, transactionId, month, year, paid } = req.body;
+
+        if (!email || !amount || !transactionId || !month || !year) {
+          return res.status(400).send({ message: "Missing required fields" });
+        }
+
+        try {
+          // ✅ Step 1: Check if payment already exists
+          const existingPayment = await paymentCollection.findOne({
+            email,
+            month,
+            year,
+            paid:true,
+          });
+
+          if (existingPayment) {
+            return res.status(400).send({
+              message: "Payment already exists for this employee and month.",
+            });
+          }
+
+          // ✅ Step 2: Insert payment if not exists
+          const result = await paymentCollection.insertOne({
+            email,
+            amount,
+            transactionId,
+            month,
+            year,
+            paid,
+            payDate: new Date(),
+          });
+
+          res.send({ message: "Payment saved", result });
+        } catch (err) {
+          res
+            .status(500)
+            .send({ message: "Failed to save payment", error: err.message });
+        }
+      }
+    );
+
+    // Get payment history with pagination
     app.get("/payments", async (req, res) => {
       const email = req.query.email;
       const page = parseInt(req.query.page) || 0;
@@ -420,38 +501,22 @@ async function run() {
       res.send({ payments, total });
     });
 
-    // ===== Payroll unpaid payments (Admin only) =====
+    // Get all payroll data (Admin only)
     app.get(
       "/payroll",
       verifyFirebaseToken,
       checkRole("admin"),
       async (req, res) => {
         try {
-          const unpaid = await paymentCollection
-            .find({ paid: { $ne: true } })
-            .toArray();
-          res.send(unpaid);
+          const allPayroll = await paymentCollection.find({}).toArray();
+          res.send(allPayroll);
         } catch (error) {
           res.status(500).send({ message: "Failed to fetch payroll data" });
         }
       }
     );
-    ///////
-    // app.get(
-    //   "/verified-users",
-    //   verifyFirebaseToken,
-    //   checkRole("admin"),
-    //   async (req, res) => {
-    //     try {
-    //       const users = await userCollection
-    //         .find({ isVerified: true })
-    //         .toArray();
-    //       res.send(users);
-    //     } catch (error) {
-    //       res.status(500).send({ message: "Failed to fetch verified users" });
-    //     }
-    //   }
-    // );
+
+    // Get verified users (Admin only)
     app.get(
       "/verified-users",
       verifyFirebaseToken,
@@ -468,6 +533,7 @@ async function run() {
       }
     );
 
+    // Promote user to HR (Admin only)
     app.patch(
       "/make-hr/:id",
       verifyFirebaseToken,
@@ -486,6 +552,7 @@ async function run() {
       }
     );
 
+    // Fire user (Admin only)
     app.patch(
       "/fire-user/:id",
       verifyFirebaseToken,
@@ -504,68 +571,118 @@ async function run() {
       }
     );
 
-    app.patch(
-      "/update-salary/:id",
-      verifyFirebaseToken,
-      checkRole("admin"),
-      async (req, res) => {
-        const id = req.params.id;
-        const { salary } = req.body;
-        try {
-          const user = await userCollection.findOne({ _id: new ObjectId(id) });
-          if (!user) return res.status(404).send({ message: "User not found" });
-          if (salary < user.salary)
-            return res
-              .status(400)
-              .send({ message: "Salary cannot be decreased" });
-
-          const result = await userCollection.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: { salary } }
-          );
-          res.send(result);
-        } catch (error) {
-          res.status(500).send({ message: "Failed to update salary" });
-        }
-      }
-    );
-
-    // POST: Save contact message
-    app.post("/contact", async (req, res) => {
+    // Save contact message (Anyone)
+    app.post("/contact-messages", async (req, res) => {
       const { email, message } = req.body;
       if (!email || !message) return res.status(400).send("Missing fields");
 
-      await messages.insertOne({ email, message, time: new Date() });
+      await messagesCollection.insertOne({ email, message, time: new Date() });
       res.send({ success: true });
     });
 
-    // GET: Admin reads all messages
+    // Admin fetches all contact messages
     app.get("/admin/messages", async (req, res) => {
-      const result = await messages.find().sort({ time: -1 }).toArray();
+      const result = await messagesCollection
+        .find()
+        .sort({ time: -1 })
+        .toArray();
       res.send(result);
     });
 
-    // ===== Approve payment (Admin only) =====
+    // Approve payment (Admin only)
+    // app.patch(
+    //   "/payroll/pay/:id",
+    //   verifyFirebaseToken,
+    //   checkRole("admin"),
+    //   async (req, res) => {
+    //     const id = req.params.id;
+    //     const payDate = new Date();
+    //     try {
+    //       const result = await paymentCollection.updateOne(
+    //         { _id: new ObjectId(id) },
+    //         { $set: { paid: true, approved: true, payDate } }
+    //       );
+    //       res.send(result);
+    //     } catch (error) {
+    //       res.status(500).send({ message: "Failed to approve payment" });
+    //     }
+    //   }
+    // );
+    // Approve payment (Admin only) - আগের সাধারণ পেমেন্ট আপডেট (কমেন্ট করা আছে)
+    // app.patch(
+    //   "/payroll/pay/:id",
+    //   verifyFirebaseToken,
+    //   checkRole("admin"),
+    //   async (req, res) => {
+    //     const id = req.params.id;
+    //     const payDate = new Date();
+    //     try {
+    //       const result = await paymentCollection.updateOne(
+    //         { _id: new ObjectId(id) },
+    //         { $set: { paid: true, approved: true, payDate } }
+    //       );
+    //       res.send(result);
+    //     } catch (error) {
+    //       res.status(500).send({ message: "Failed to approve payment" });
+    //     }
+    //   }
+    // );
+
+    // নতুন: Stripe payment confirm করে পেমেন্ট ডাটাবেজে আপডেট করা
     app.patch(
       "/payroll/pay/:id",
       verifyFirebaseToken,
       checkRole("admin"),
       async (req, res) => {
         const id = req.params.id;
-        const payDate = new Date();
+        const { paymentIntentId } = req.body;
+
+        if (!paymentIntentId) {
+          return res
+            .status(400)
+            .send({ message: "paymentIntentId is required" });
+        }
+
         try {
+          // Stripe এ paymentIntent কনফার্ম করা
+          const paymentIntent = await stripe.paymentIntents.confirm(
+            paymentIntentId
+          );
+
+          if (paymentIntent.status !== "succeeded") {
+            return res.status(400).send({ message: "Payment not successful" });
+          }
+
+          // সফল পেমেন্ট হলে ডাটাবেজ আপডেট
+          const payDate = new Date();
           const result = await paymentCollection.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { paid: true, payDate } }
+            {
+              $set: {
+                paid: true,
+                approved: true,
+                payDate,
+                transactionId: paymentIntent.id, // Stripe transaction ID
+              },
+            }
           );
-          res.send(result);
+
+          res.send({
+            message: "Payment successful and payroll updated",
+            paymentIntent,
+            dbUpdateResult: result,
+          });
         } catch (error) {
-          res.status(500).send({ message: "Failed to approve payment" });
+          console.error("Stripe payment failed:", error);
+          res.status(500).send({
+            message: "Failed to process payment",
+            error: error.message,
+          });
         }
       }
     );
 
-    // Add any other APIs you need here...
+    // Add more APIs as needed here...
   } catch (err) {
     console.error("MongoDB error:", err);
   }
