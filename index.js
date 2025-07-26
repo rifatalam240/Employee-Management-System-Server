@@ -184,7 +184,7 @@ async function run() {
       async (req, res) => {
         try {
           const users = await userCollection
-            .find({ isVerified: true, isFired: { $ne: true } })
+            .find({ isVerified: true })
             .toArray();
           res.send(users);
         } catch (error) {
@@ -453,7 +453,7 @@ async function run() {
             email,
             month,
             year,
-            paid:true,
+            paid: true,
           });
 
           if (existingPayment) {
