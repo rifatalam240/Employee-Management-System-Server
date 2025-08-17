@@ -705,7 +705,7 @@ async function run() {
         const users = await userCollection
           .find({ isFired: true })
           .sort({ _id: -1 }) // newest inserted first
-          .limit(5)
+          .limit(6)
           .toArray();
 
         // শুধু প্রয়োজনীয় ফিল্ড পাঠানো
