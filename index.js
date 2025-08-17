@@ -589,6 +589,146 @@ async function run() {
       res.send(result);
     });
 
+    //dashboard//
+
+    // Get dashboard summary (Admin or HR)
+
+    app.get(
+      "/api/dashboardhome",
+      // verifyFirebaseToken, // Firebase token verify
+      // checkRole(["admin", "hr"]), // শুধু admin ও hr access
+      async (req, res) => {
+        try {
+          // userCollection আগেই index.js বা main file এ define করা আছে
+          const totalUsers = await userCollection.countDocuments();
+          const totalEmployees = await userCollection.countDocuments({
+            role: "employee",
+            // isFired: false,
+          });
+          const totalHR = await userCollection.countDocuments({
+            role: "hr",
+            isFired: false,
+          });
+          const verifiedHR = await userCollection.countDocuments({
+            role: "hr",
+            isVerified: true,
+            // isFired: false,
+          });
+
+          res.json({ totalUsers, totalEmployees, totalHR, verifiedHR });
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ error: "Server error" });
+        }
+      }
+    );
+
+    app.get(
+      "/api/worksheet-summary",
+      // verifyFirebaseToken, checkRole(["admin","hr"]),
+      async (req, res) => {
+        try {
+          const worksheets = await worksheetCollection.find({}).toArray();
+          res.json(worksheets);
+        } catch (err) {
+          console.error(err);
+          res.status(500).json({ error: "Server error" });
+        }
+      }
+    );
+
+    // GET Monthly Hours (for all employees or single employee)
+    // API: Get Monthly Hours
+    app.get("/api/dashboard/monthly-hours", async (req, res) => {
+      try {
+        const { email } = req.query; // optional: filter by employee
+
+        const pipeline = [];
+
+        // Add $match stage only if email is provided
+        if (email) {
+          pipeline.push({ $match: { email } });
+        }
+
+        // Group by year & month and sum hours
+        pipeline.push(
+          {
+            $group: {
+              _id: {
+                year: { $year: { $toDate: "$date" } },
+                month: { $month: { $toDate: "$date" } },
+              },
+              totalHours: { $sum: "$hours" },
+            },
+          },
+          {
+            $sort: { "_id.year": 1, "_id.month": 1 },
+          }
+        );
+
+        const result = await worksheetCollection.aggregate(pipeline).toArray();
+
+        res.status(200).send(result);
+      } catch (error) {
+        console.error("Error fetching monthly hours:", error);
+        res
+          .status(500)
+          .send({ message: "Error fetching monthly hours", error });
+      }
+    });
+    app.get("/api/dashboard/task-types", async (req, res) => {
+      try {
+        const data = await worksheetCollection
+          .aggregate([
+            {
+              $group: {
+                _id: { $ifNull: ["$task", "Unknown"] }, // এখানে "$task" field ব্যবহার
+                count: { $sum: 1 },
+              },
+            },
+          ])
+          .toArray();
+
+        const taskTypes = {};
+        data.forEach((item) => {
+          taskTypes[item._id] = item.count;
+        });
+
+        res.json(taskTypes);
+      } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to fetch task types" });
+      }
+    });
+    app.get("/api/dashboard/latest-fired-users", async (req, res) => {
+      try {
+        const users = await userCollection
+          .find({ isFired: true })
+          .sort({ _id: -1 }) // newest inserted first
+          .limit(5)
+          .toArray();
+
+        // শুধু প্রয়োজনীয় ফিল্ড পাঠানো
+        const latestFiredUsers = users.map((u) => ({
+          name: u.name,
+          email: u.email,
+          role: u.role,
+          isVerified: u.isVerified,
+          designation: u.designation,
+        }));
+
+        res.json(latestFiredUsers);
+      } catch (err) {
+        console.error("Latest fired users error:", err);
+        res
+          .status(500)
+          .json({
+            error: "Failed to fetch latest fired users",
+            details: err.message,
+          });
+      }
+    });
+
     // Approve payment (Admin only)
     // app.patch(
     //   "/payroll/pay/:id",
